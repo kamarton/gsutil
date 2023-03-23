@@ -1609,7 +1609,7 @@ class RsyncCommand(Command):
       usage_synopsis=_SYNOPSIS,
       min_args=2,
       max_args=2,
-      supported_sub_args='a:cCdenpPriRuUx:y:j:J:S',
+      supported_sub_args='a:cCdenpPriRuUx:y:j:JS',
       file_url_ok=True,
       provider_url_ok=False,
       urls_start_arg=0,
