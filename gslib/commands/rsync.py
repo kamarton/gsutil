@@ -668,7 +668,22 @@ def _ListUrlRootFunc(cls, args_tuple, thread_state=None):
   out_file.close()
 
 
-def _LocalDirIterator(base_url):
+def _ParseSizeDesc(size_desc):
+  if size_desc is None:
+    return None
+  m = re.match(r'^([+-])?(\d+)([kKmMgGtT])?$', size_desc)
+  if m is None:
+    raise CommandException('Invalid size description: %s' % size_desc)
+  size = int(m.group(2))
+  units = {'k': 1024, 'm': 1024 * 1024, 'g': 1024 * 1024 * 1024, 't': 1024 * 1024 * 1024 * 1024}
+  if m.group(3) is not None:
+    size *= units[m.group(3).lower()]
+  if m.group(1) == '-':
+    size = -size
+  return size
+
+
+def _LocalDirIterator(base_url, size_filter=None):
   """A generator that yields a BLR for each file in a local directory.
 
      We use this function instead of WildcardIterator for listing a local
@@ -678,6 +693,7 @@ def _LocalDirIterator(base_url):
 
   Args:
     base_url: URL for the directory over which to iterate.
+    size_filter: optional size filter, as described in _ParseSizeDesc.
 
   Yields:
     BucketListingObject for each file in the directory.
@@ -685,10 +701,16 @@ def _LocalDirIterator(base_url):
   for filename in os.listdir(base_url.object_name):
     filename = os.path.join(base_url.object_name, filename)
     if os.path.isfile(filename):
+      if size_filter is not None:
+        statinfo = os.stat(filename)
+        if size_filter < 0 and statinfo.st_size > -size:
+          continue
+        elif size_filter > 0 and statinfo.st_size < size:
+          continue
       yield BucketListingObject(StorageUrlFromString(filename), None)
 
 
-def _FieldedListingIterator(cls, gsutil_api, base_url_str, desc):
+def _FieldedListingIterator(cls, gsutil_api, base_url_str, desc, size_filter=None):
   """Iterator over base_url_str formatting output per _BuildTmpOutputLine.
 
   Args:
@@ -696,13 +718,14 @@ def _FieldedListingIterator(cls, gsutil_api, base_url_str, desc):
     gsutil_api: gsutil Cloud API instance to use for bucket listing.
     base_url_str: The top-level URL string over which to iterate.
     desc: 'source' or 'destination'.
+    size_filter: optional size filter, as described in _ParseSizeDesc.
 
   Yields:
     Output line formatted per _BuildTmpOutputLine.
   """
   base_url = StorageUrlFromString(base_url_str)
   if base_url.scheme == 'file' and not cls.recursion_requested:
-    iterator = _LocalDirIterator(base_url)
+    iterator = _LocalDirIterator(base_url, size_filter=size_filter)
   else:
     if cls.recursion_requested:
       wildcard = '%s/**' % base_url_str.rstrip('/\\')
@@ -1586,7 +1609,7 @@ class RsyncCommand(Command):
       usage_synopsis=_SYNOPSIS,
       min_args=2,
       max_args=2,
-      supported_sub_args='a:cCdenpPriRuUx:y:j:J',
+      supported_sub_args='a:cCdenpPriRuUx:y:j:J:S',
       file_url_ok=True,
       provider_url_ok=False,
       urls_start_arg=0,
@@ -1745,6 +1768,7 @@ class RsyncCommand(Command):
     # canned_acl is handled by a helper function in parent
     # Command class, so save in Command state rather than CopyHelperOpts.
     self.canned = None
+    self.size_filter = None
 
     # Files matching these extensions should be compressed.
     # The gzip_encoded flag marks if the files should be compressed during
@@ -1799,6 +1823,8 @@ class RsyncCommand(Command):
             self.exclude_pattern = re.compile(a)
           except re.error:
             raise CommandException('Invalid exclude filter (%s)' % a)
+        elif o == '-S':
+          self.size_filter = _ParseSizeDesc(a)
 
     if self.preserve_acl and canned_acl:
       raise CommandException(
